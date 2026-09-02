@@ -2,248 +2,44 @@ import { useEffect, useState } from "react";
 import "./App.css";
 
 const API_URL = "http://127.0.0.1:8000";
+const categoryColors = { "Food & Dining": "#f07b58", Shopping: "#5b7cfa", Transport: "#39a982", "Bills & Utilities": "#e4ad45", Entertainment: "#9b72d6", Health: "#dc6684", Other: "#8f9690" };
+const emptyForm = { amount: "", description: "", category: "", payment_method: "UPI" };
+const money = (value) => `₹${Number(value || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
 
 function App() {
   const [transactions, setTransactions] = useState([]);
+  const [form, setForm] = useState(emptyForm);
   const [loading, setLoading] = useState(false);
-
-  const [form, setForm] = useState({
-    amount: "",
-    description: "",
-    category: "",
-    payment_method: "UPI",
-  });
-
-  // Fetch transactions from backend
-  const fetchTransactions = async () => {
-    try {
-      const response = await fetch(`${API_URL}/transactions`);
-
-      if (!response.ok) {
-        throw new Error("Failed to fetch transactions");
-      }
-
-      const data = await response.json();
-      setTransactions(data);
-    } catch (error) {
-      console.error("Error:", error);
-    }
-  };
-
-  useEffect(() => {
-    fetchTransactions();
-  }, []);
-
-  // Handle form input
-  const handleChange = (event) => {
-    setForm({
-      ...form,
-      [event.target.name]: event.target.value,
-    });
-  };
-
-  // Add manual transaction
-  const addTransaction = async (event) => {
-    event.preventDefault();
-
-    if (!form.amount || !form.description) {
-      alert("Please enter amount and description.");
-      return;
-    }
-
-    try {
-      const response = await fetch(`${API_URL}/transactions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          amount: Number(form.amount),
-          description: form.description,
-          category: form.category || "Other",
-          payment_method: form.payment_method,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to add transaction");
-      }
-
-      setForm({
-        amount: "",
-        description: "",
-        category: "",
-        payment_method: "UPI",
-      });
-
-      fetchTransactions();
-    } catch (error) {
-      console.error("Error:", error);
-      alert("Could not add transaction.");
-    }
-  };
-
-  // Upload bank / UPI statement
-  const uploadStatement = async (event) => {
-    const file = event.target.files[0];
-
-    if (!file) return;
-
-    const formData = new FormData();
-    formData.append("file", file);
-
-    setLoading(true);
-
-    try {
-      const response = await fetch(`${API_URL}/upload`, {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error("Upload failed");
-      }
-
-      const data = await response.json();
-
-      console.log("Upload result:", data);
-
-      alert("Statement uploaded successfully!");
-
-      fetchTransactions();
-    } catch (error) {
-      console.error("Error:", error);
-      alert("Could not upload statement.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="app">
-      {/* HEADER */}
-      <header className="header">
-        <div>
-          <h1>💸 MoneyTrail</h1>
-          <p>Track where your money goes.</p>
-        </div>
-
-        <label className="upload-button">
-          {loading ? "Uploading..." : "📄 Upload Statement"}
-          <input
-            type="file"
-            accept=".pdf,.csv,.xlsx,.xls"
-            onChange={uploadStatement}
-            hidden
-          />
-        </label>
-      </header>
-
-      <main className="container">
-        {/* SUMMARY */}
-        <section className="summary">
-          <div className="summary-card">
-            <span>Total Transactions</span>
-            <strong>{transactions.length}</strong>
-          </div>
-
-          <div className="summary-card">
-            <span>Total Spent</span>
-            <strong>
-              ₹
-              {transactions
-                .reduce((total, transaction) => {
-                  return total + Number(transaction.amount || 0);
-                }, 0)
-                .toFixed(2)}
-            </strong>
-          </div>
-        </section>
-
-        {/* ADD TRANSACTION */}
-        <section className="card">
-          <h2>➕ Add Expense</h2>
-
-          <form onSubmit={addTransaction} className="transaction-form">
-            <input
-              type="number"
-              name="amount"
-              placeholder="Amount (₹)"
-              value={form.amount}
-              onChange={handleChange}
-            />
-
-            <input
-              type="text"
-              name="description"
-              placeholder="Description"
-              value={form.description}
-              onChange={handleChange}
-            />
-
-            <input
-              type="text"
-              name="category"
-              placeholder="Category"
-              value={form.category}
-              onChange={handleChange}
-            />
-
-            <select
-              name="payment_method"
-              value={form.payment_method}
-              onChange={handleChange}
-            >
-              <option value="UPI">UPI</option>
-              <option value="Cash">Cash</option>
-              <option value="Card">Card</option>
-              <option value="Bank Transfer">Bank Transfer</option>
-            </select>
-
-            <button type="submit">Add Transaction</button>
-          </form>
-        </section>
-
-        {/* TRANSACTIONS */}
-        <section className="card">
-          <div className="section-heading">
-            <h2>📊 Your Transactions</h2>
-
-            <button onClick={fetchTransactions} className="refresh-button">
-              Refresh
-            </button>
-          </div>
-
-          {transactions.length === 0 ? (
-            <p className="empty">
-              No transactions yet. Add one or upload your statement.
-            </p>
-          ) : (
-            <div className="transaction-list">
-              {transactions.map((transaction) => (
-                <div
-                  className="transaction"
-                  key={transaction.id}
-                >
-                  <div>
-                    <h3>{transaction.description}</h3>
-                    <p>
-                      {transaction.category || "Other"} ·{" "}
-                      {transaction.payment_method || "Unknown"}
-                    </p>
-                  </div>
-
-                  <strong>
-                    ₹{Number(transaction.amount).toFixed(2)}
-                  </strong>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-      </main>
-    </div>
-  );
+  const [lockedFile, setLockedFile] = useState(null);
+  const [pdfPassword, setPdfPassword] = useState("");
+  const [passwordModalOpen, setPasswordModalOpen] = useState(false);
+  const [passwordError, setPasswordError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [activeView, setActiveView] = useState("Overview");
+  const [aiInsight, setAiInsight] = useState("");
+  const [insightLoading, setInsightLoading] = useState(false);
+  const fetchTransactions = async () => { try { const response = await fetch(`${API_URL}/transactions`); if (!response.ok) throw new Error(); setTransactions(await response.json()); } catch { setNotice("Start the FastAPI server to sync your transactions."); } };
+  useEffect(() => { const timer = setTimeout(fetchTransactions, 0); return () => clearTimeout(timer); }, []);
+  const totalSpent = transactions.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const categoryTotals = transactions.reduce((result, item) => { const category = item.category || "Other"; result[category] = (result[category] || 0) + Number(item.amount || 0); return result; }, {});
+  const categories = Object.entries(categoryTotals).sort(([, first], [, second]) => second - first);
+  const topCategory = categories[0]?.[0] || "Food & Dining";
+  const average = transactions.length ? totalSpent / transactions.length : 0;
+  const addTransaction = async (event) => { event.preventDefault(); if (!form.amount || !form.description) { setNotice("Add an amount and description first."); return; } try { const response = await fetch(`${API_URL}/transactions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...form, amount: Number(form.amount), category: form.category || "Other" }) }); if (!response.ok) throw new Error(); setForm(emptyForm); setNotice("Expense added to your trail."); await fetchTransactions(); } catch { setNotice("Could not add expense. Is the API running?"); } };
+  const submitStatement = async (file, password = "") => { const body = new FormData(); body.append("file", file); body.append("statement_password", password); const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 300000); setLoading(true); setNotice("Importing statement. Scanned PDFs can take a little longer."); try { const response = await fetch(`${API_URL}/upload`, { method: "POST", body, signal: controller.signal }); const data = await response.json(); if (!response.ok) { if (response.status === 422 && typeof data.detail === "string" && data.detail.includes("password-protected")) { setLockedFile(file); setPasswordModalOpen(true); setPasswordError(password ? "That password was not accepted. Try again." : "This PDF is locked. Enter its password to continue."); return; } throw new Error(data.detail || "Upload failed"); } setNotice(data.message); setPasswordModalOpen(false); setPasswordError(""); setPdfPassword(""); setLockedFile(null); await fetchTransactions(); } catch (error) { setNotice(error.name === "AbortError" ? "Import timed out after 5 minutes. Upload a smaller page range or a CSV statement." : error.message || "Could not import statement."); } finally { clearTimeout(timeout); setLoading(false); } };
+  const uploadStatement = async (event) => { const file = event.target.files[0]; event.target.value = ""; if (file) await submitStatement(file); };
+  const unlockAndImport = async (event) => { event.preventDefault(); if (!pdfPassword) { setPasswordError("Enter the PDF password to continue."); return; } if (lockedFile) await submitStatement(lockedFile, pdfPassword); };
+  const closePasswordModal = () => { setPasswordModalOpen(false); setPasswordError(""); setPdfPassword(""); setLockedFile(null); };
+  const askAi = async () => { setInsightLoading(true); try { const response = await fetch(`${API_URL}/insights`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: "What stands out about my spending?" }) }); const data = await response.json(); if (!response.ok) throw new Error(data.detail || "Insight request failed"); setAiInsight(data.answer); } catch (error) { setAiInsight(error.message || "Could not generate an insight."); } finally { setInsightLoading(false); } };
+  const resetDatabase = async () => { if (!window.confirm("Delete all transactions permanently? This cannot be undone.")) return; try { const response = await fetch(`${API_URL}/transactions/reset`, { method: "DELETE" }); const data = await response.json(); if (!response.ok) throw new Error(data.detail || "Reset failed"); setTransactions([]); setAiInsight(""); setNotice(data.message); } catch (error) { setNotice(error.message || "Could not reset your data."); } };
+  return <div className="app-shell">
+    <aside className="sidebar"><div className="brand"><span className="brand-mark">M</span><span>moneytrail</span></div><nav className="nav-list">{["Overview", "Transactions", "Insights"].map((item) => <button className={activeView === item ? "nav-item active" : "nav-item"} onClick={() => setActiveView(item)} key={item}><span className="nav-icon">{item === "Overview" ? "◫" : item === "Transactions" ? "≡" : "✦"}</span>{item}</button>)}</nav><button className="reset-button" onClick={resetDatabase}>⌫ Reset all data</button><div className="sidebar-footer"><span className="avatar">U</span><div><strong>User</strong><small>Personal account</small></div><span className="more">•••</span></div></aside>
+    <main className="main-content"><header className="topbar"><div><p className="eyebrow">PERSONAL FINANCE / SEPTEMBER 2026</p><h1>{activeView}</h1></div><div className="top-actions"><button className="icon-button" title="Notifications">♧</button><label className="import-button">{loading ? "Importing..." : "＋ Import statement"}<input type="file" accept=".csv,.pdf" onChange={uploadStatement} hidden /></label></div></header>{notice && <div className="notice" role="status">{notice}<button onClick={() => setNotice("")}>×</button></div>}
+      {activeView === "Overview" && <><section className="hero-row"><div><p className="eyebrow warm">YOUR MONEY, IN MOTION</p><h2>A clearer view of<br /><em>every rupee.</em></h2><p className="hero-copy">Track the trail, spot the patterns, and make your next move with confidence.</p></div><div className="hero-art"><div className="orbit orbit-one" /><div className="orbit orbit-two" /><span>₹</span></div></section><section className="stat-grid"><div className="stat-card featured"><span>Spent this month</span><strong>{money(totalSpent)}</strong><small className="positive">↗ Keep an eye on your top categories</small></div><div className="stat-card"><span>Transactions</span><strong>{transactions.length}</strong><small>Across all payment methods</small></div><div className="stat-card"><span>Average transaction</span><strong>{money(average)}</strong><small>Per recorded expense</small></div></section><section className="content-grid"><div className="panel spending-panel"><div className="panel-heading"><div><p className="eyebrow">WHERE IT WENT</p><h3>Spending by category</h3></div><span className="period-pill">This month⌄</span></div>{categories.length ? <div className="category-list">{categories.map(([category, value]) => <div className="category-row" key={category}><div className="category-label"><span className="dot" style={{ background: categoryColors[category] || categoryColors.Other }} />{category}<b>{Math.round((value / totalSpent) * 100)}%</b></div><div className="bar-track"><div className="bar-fill" style={{ width: `${(value / categories[0][1]) * 100}%`, background: categoryColors[category] || categoryColors.Other }} /></div><strong>{money(value)}</strong></div>)}</div> : <div className="empty-state">Add an expense or import a CSV to see your spending map.</div>}</div><div className="panel insight-panel"><div className="insight-spark">✦</div><p className="eyebrow warm">TRAIL INSIGHT</p><h3>{transactions.length ? `${topCategory} is leading the way.` : "Your story starts here."}</h3><p>{transactions.length ? `You have logged ${transactions.length} transactions. Your average spend is ${money(average)} per transaction.` : "Import your bank statement or add a cash expense to unlock your first insight."}</p><button className="text-button" onClick={() => setActiveView("Transactions")}>Explore transactions <span>→</span></button></div></section></>}
+      {activeView === "Transactions" && <section className="panel full-panel"><div className="panel-heading"><div><p className="eyebrow">THE FULL TRAIL</p><h3>Recent transactions</h3></div><button className="refresh-button" onClick={fetchTransactions}>↻ Refresh</button></div><div className="transaction-table"><div className="table-head"><span>DESCRIPTION</span><span>CATEGORY</span><span>METHOD</span><span>DATE</span><span>AMOUNT</span></div>{transactions.slice().reverse().map((transaction) => <div className="table-row" key={transaction.id}><strong>{transaction.description}</strong><span><i className="dot" style={{ background: categoryColors[transaction.category] || categoryColors.Other }} />{transaction.category}</span><span>{transaction.payment_method}</span><span>{transaction.date}</span><b>{money(transaction.amount)}</b></div>)}{!transactions.length && <div className="empty-state">No transactions yet.</div>}</div></section>}
+      {activeView === "Insights" && <section className="insights-view"><div className="panel add-panel"><p className="eyebrow warm">QUICK CAPTURE</p><h3>Log a cash expense</h3><form onSubmit={addTransaction}><label>Amount<input name="amount" type="number" min="1" placeholder="0" value={form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value })} /></label><label>What was it for?<input name="description" placeholder="e.g. Morning coffee" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label><label>Category<select name="category" value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}><option value="">Auto-detect</option>{Object.keys(categoryColors).map((category) => <option key={category}>{category}</option>)}</select></label><label>Paid with<select name="payment_method" value={form.payment_method} onChange={(event) => setForm({ ...form, payment_method: event.target.value })}><option>UPI</option><option>Cash</option><option>Card</option><option>Bank</option></select></label><button className="submit-button">Add expense <span>→</span></button></form></div><div className="panel insight-panel large-insight"><div className="insight-spark">✦</div><p className="eyebrow warm">AI TRAIL INSIGHT</p><h3>{transactions.length ? `A ${topCategory.toLowerCase()}-first month.` : "Small inputs, sharper decisions."}</h3><p>{aiInsight || (transactions.length ? `Based on your current trail, ${topCategory} accounts for ${Math.round((categories[0][1] / totalSpent) * 100)}% of spending.` : "MoneyTrail turns messy statements and everyday cash spending into a simple picture of your habits.")}</p><button className="text-button" onClick={askAi}>{insightLoading ? "Thinking..." : "Ask Llama for an insight"} <span>→</span></button></div></section>}
+    </main>
+    {passwordModalOpen && <div role="presentation" style={{ position: "fixed", inset: 0, zIndex: 10, display: "grid", placeItems: "center", padding: 20, background: "rgba(20, 38, 29, 0.55)" }}><form role="dialog" aria-modal="true" aria-labelledby="password-dialog-title" onSubmit={unlockAndImport} style={{ width: "min(100%, 390px)", padding: 28, borderRadius: 8, background: "#fffefa", boxShadow: "0 18px 55px rgba(0, 0, 0, 0.25)" }}><p className="eyebrow warm">PROTECTED STATEMENT</p><h2 id="password-dialog-title" style={{ margin: "0 0 10px", fontSize: 25 }}>Enter PDF password</h2><p style={{ margin: "0 0 18px", color: "#68736c", fontSize: 13, lineHeight: 1.6 }}>{lockedFile?.name} is locked. Your password is used only for this import.</p>{passwordError && <p role="alert" style={{ margin: "0 0 12px", color: "#a65f40", fontSize: 12 }}>{passwordError}</p>}<label style={{ display: "grid", gap: 7, color: "#68736c", fontSize: 12 }}>PDF password<input autoFocus type="password" value={pdfPassword} onChange={(event) => setPdfPassword(event.target.value)} style={{ padding: 11, border: "1px solid #cbd5cc", borderRadius: 4, fontSize: 14 }} /></label><div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 22 }}><button type="button" onClick={closePasswordModal} style={{ border: 0, padding: "11px 13px", background: "transparent", color: "#68736c", fontWeight: 700 }}>Cancel</button><button className="submit-button" type="submit" disabled={loading}>{loading ? "Importing..." : "Unlock & import"}</button></div></form></div>}
+    </div>;
 }
-
 export default App;
