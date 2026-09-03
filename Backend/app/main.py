@@ -70,6 +70,7 @@ class TransactionCreate(BaseModel):
     description: str
     category: str
     payment_method: str
+    transaction_type: str = "Withdrawn"
     date: date_type = Field(default_factory=date_type.today)
     source: str = "manual"
 
@@ -142,10 +143,22 @@ def reset_transactions():
 def add_transaction(transaction_data: TransactionCreate):
 
     with sqlite3.connect(DATABASE_PATH) as connection:
-        cursor = connection.execute("INSERT INTO transactions (amount, description, category, payment_method, date, source, withdrawal_amount) VALUES (?, ?, ?, ?, ?, ?, ?)", (transaction_data.amount, transaction_data.description, transaction_data.category, transaction_data.payment_method, transaction_data.date.isoformat(), transaction_data.source, transaction_data.amount))
+        cursor = connection.execute(
+            "INSERT INTO transactions (amount, description, category, payment_method, date, source, withdrawal_amount, deposit_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                transaction_data.amount,
+                transaction_data.description,
+                transaction_data.category,
+                transaction_data.payment_method,
+                transaction_data.date.isoformat(),
+                transaction_data.source,
+                transaction_data.amount if transaction_data.transaction_type == "Withdrawn" else 0,
+                transaction_data.amount if transaction_data.transaction_type == "Deposit" else 0
+            )
+        )
         new_id = cursor.lastrowid
-    return Transaction(id=new_id, **transaction_data.model_dump())
 
+    return Transaction(id=new_id, **transaction_data.model_dump())
 
 @app.post("/upload")
 async def upload_statement(
@@ -529,11 +542,11 @@ def generate_insight(request: InsightRequest):
 def categorize(description: str) -> str:
     merchant = description.lower()
     rules = {
-        "Food & Dining": ("swiggy", "zomato", "restaurant", "cafe", "food", "domino"),
-        "Shopping": ("amazon", "flipkart", "myntra", "retail", "mall"),
+        "Food & Dining": ("swiggy", "zomato", "restaurant", "cafe", "food", "domino", "nestle"),
+        "Shopping": ("amazon", "flipkart", "myntra", "retail", "mall", "store", "nykaa", "fashion"),
         "Transport": ("uber", "ola", "metro", "fuel", "petrol", "rapido"),
-        "Bills & Utilities": ("electric", "recharge", "airtel", "jio", "bill", "water"),
-        "Entertainment": ("netflix", "spotify", "movie", "bookmyshow"),
+        "Bills & Utilities": ("electric", "recharge", "airtel", "jio", "bill", "water", "interest", "card"),
+        "Entertainment": ("netflix", "spotify", "movie", "bookmyshow", "youtube"),
         "Health": ("pharmacy", "hospital", "apollo", "doctor"),
     }
     for category, keywords in rules.items():
