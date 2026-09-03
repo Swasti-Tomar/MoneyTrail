@@ -19,7 +19,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List
-from datetime import date as date_type
+from datetime import date as date_type, datetime
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -59,6 +59,10 @@ class Transaction(BaseModel):
     payment_method: str
     date: date_type
     source: str
+    reference_number: str = ""
+    withdrawal_amount: float = 0
+    deposit_amount: float = 0
+    closing_balance: float = 0
 
 
 class TransactionCreate(BaseModel):
@@ -81,17 +85,21 @@ def initialize_database():
     database_exists = DATABASE_PATH.exists()
     with sqlite3.connect(DATABASE_PATH) as connection:
         connection.execute("CREATE TABLE IF NOT EXISTS transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, amount REAL NOT NULL, description TEXT NOT NULL, category TEXT NOT NULL, payment_method TEXT NOT NULL, date TEXT NOT NULL, source TEXT NOT NULL)")
+        existing_columns = {row[1] for row in connection.execute("PRAGMA table_info(transactions)")}
+        for column, definition in (("reference_number", "TEXT NOT NULL DEFAULT ''"), ("withdrawal_amount", "REAL NOT NULL DEFAULT 0"), ("deposit_amount", "REAL NOT NULL DEFAULT 0"), ("closing_balance", "REAL NOT NULL DEFAULT 0")):
+            if column not in existing_columns:
+                connection.execute(f"ALTER TABLE transactions ADD COLUMN {column} {definition}")
         if not database_exists:
             connection.executemany("INSERT INTO transactions (amount, description, category, payment_method, date, source) VALUES (?, ?, ?, ?, ?, ?)", [(20, "Auto", "Transport", "Cash", "2026-08-31", "manual"), (350, "Food Order", "Food & Dining", "UPI", "2026-08-30", "imported")])
 
 
 def transaction_from_row(row) -> Transaction:
-    return Transaction(id=row[0], amount=row[1], description=row[2], category=row[3], payment_method=row[4], date=date_type.fromisoformat(row[5]), source=row[6])
+    return Transaction(id=row[0], amount=row[1], description=row[2], category=row[3], payment_method=row[4], date=date_type.fromisoformat(row[5]), source=row[6], reference_number=row[7], withdrawal_amount=row[8], deposit_amount=row[9], closing_balance=row[10])
 
 
 def read_transactions() -> List[Transaction]:
     with sqlite3.connect(DATABASE_PATH) as connection:
-        rows = connection.execute("SELECT id, amount, description, category, payment_method, date, source FROM transactions ORDER BY date DESC, id DESC").fetchall()
+        rows = connection.execute("SELECT id, amount, description, category, payment_method, date, source, reference_number, withdrawal_amount, deposit_amount, closing_balance FROM transactions ORDER BY date DESC, id DESC").fetchall()
     return [transaction_from_row(row) for row in rows]
 
 
@@ -134,7 +142,7 @@ def reset_transactions():
 def add_transaction(transaction_data: TransactionCreate):
 
     with sqlite3.connect(DATABASE_PATH) as connection:
-        cursor = connection.execute("INSERT INTO transactions (amount, description, category, payment_method, date, source) VALUES (?, ?, ?, ?, ?, ?)", (transaction_data.amount, transaction_data.description, transaction_data.category, transaction_data.payment_method, transaction_data.date.isoformat(), transaction_data.source))
+        cursor = connection.execute("INSERT INTO transactions (amount, description, category, payment_method, date, source, withdrawal_amount) VALUES (?, ?, ?, ?, ?, ?, ?)", (transaction_data.amount, transaction_data.description, transaction_data.category, transaction_data.payment_method, transaction_data.date.isoformat(), transaction_data.source, transaction_data.amount))
         new_id = cursor.lastrowid
     return Transaction(id=new_id, **transaction_data.model_dump())
 
@@ -143,6 +151,8 @@ def add_transaction(transaction_data: TransactionCreate):
 async def upload_statement(
     file: UploadFile = File(...),
     statement_password: str = Form(default=""),
+    start_date: str = Form(default=""),
+    end_date: str = Form(default=""),
 ):
 
     if not file.filename:
@@ -152,6 +162,10 @@ async def upload_statement(
         )
 
     file_content = await file.read()
+    selected_start = parse_optional_date(start_date)
+    selected_end = parse_optional_date(end_date)
+    if selected_start and selected_end and selected_start > selected_end:
+        raise HTTPException(status_code=400, detail="The statement start date must be before its end date.")
     if len(file_content) > MAX_STATEMENT_BYTES:
         raise HTTPException(status_code=413, detail="Statement is too large. Upload a PDF smaller than 20 MB.")
     logger.info("Upload received: %s (%s bytes)", file.filename, len(file_content))
@@ -178,15 +192,15 @@ async def upload_statement(
         imported = []
         for row in rows:
             description = (row.get("description") or row.get("Description") or row.get("merchant") or row.get("Merchant") or row.get("details") or "Imported transaction").strip()
-            raw_amount = row.get("amount") or row.get("Amount") or row.get("debit") or row.get("Debit") or row.get("withdrawal") or ""
-            amount = parse_amount(raw_amount)
-            if amount is None:
+            withdrawal = parse_amount(row.get("withdrawal_amount") or row.get("Withdrawal Amount") or row.get("debit") or row.get("Debit") or "") or 0
+            deposit = parse_amount(row.get("deposit_amount") or row.get("Deposit Amount") or row.get("credit") or row.get("Credit") or "") or 0
+            amount = withdrawal or (parse_amount(row.get("amount") or row.get("Amount") or "") or 0)
+            if amount == 0 and deposit == 0:
                 continue
             raw_date = row.get("date") or row.get("Date") or str(date_type.today())
-            try:
-                transaction_date = date_type.fromisoformat(raw_date.strip())
-            except ValueError:
-                transaction_date = date_type.today()
+            transaction_date = parse_statement_date(raw_date)
+            if selected_start and transaction_date < selected_start or selected_end and transaction_date > selected_end:
+                continue
             category = categorize(description)
             imported.append(Transaction(
                 id=0,
@@ -196,10 +210,14 @@ async def upload_statement(
                 payment_method=row.get("payment_method") or row.get("Payment Method") or "Bank",
                 date=transaction_date,
                 source="imported",
+                reference_number=(row.get("reference_number") or row.get("Chq. / Ref No.") or row.get("ref_no") or "").strip(),
+                withdrawal_amount=withdrawal or amount,
+                deposit_amount=deposit,
+                closing_balance=parse_amount(row.get("closing_balance") or row.get("Closing Balance") or "") or 0,
             ))
         with sqlite3.connect(DATABASE_PATH) as connection:
             for transaction in imported:
-                connection.execute("INSERT INTO transactions (amount, description, category, payment_method, date, source) VALUES (?, ?, ?, ?, ?, ?)", (transaction.amount, transaction.description, transaction.category, transaction.payment_method, transaction.date.isoformat(), transaction.source))
+                connection.execute("INSERT INTO transactions (amount, description, category, payment_method, date, source, reference_number, withdrawal_amount, deposit_amount, closing_balance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (transaction.amount, transaction.description, transaction.category, transaction.payment_method, transaction.date.isoformat(), transaction.source, transaction.reference_number, transaction.withdrawal_amount, transaction.deposit_amount, transaction.closing_balance))
         logger.info("Import complete: %s rows from %s", len(imported), file.filename)
     except HTTPException:
         raise
@@ -214,6 +232,7 @@ async def upload_statement(
         "message": f"Imported {len(imported)} transactions.",
         "filename": file.filename,
         "imported": len(imported),
+        "date_range": {"start": start_date or None, "end": end_date or None},
         "status": "complete",
     }
 
@@ -239,6 +258,26 @@ def parse_amount(raw_amount) -> float | None:
         return abs(float(numeric_value))
     except ValueError:
         return None
+
+
+def parse_statement_date(raw_date) -> date_type:
+    value = str(raw_date or "").strip()
+    for date_format in ("%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y", "%d-%m-%y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(value, date_format).date()
+        except ValueError:
+            continue
+    return date_type.today()
+
+
+def parse_optional_date(raw_date: str) -> date_type | None:
+    value = (raw_date or "").strip()
+    if not value:
+        return None
+    try:
+        return date_type.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Statement dates must use YYYY-MM-DD format.") from exc
 
 
 def extract_pdf_rows_with_timeout(file_content: bytes, statement_password: str = "") -> list[dict]:
@@ -299,8 +338,20 @@ def extract_pdf_rows(file_content: bytes, statement_password: str = "") -> list[
                 status_code=422,
                 detail=f"This statement has {len(pdf.pages)} pages. Please upload at most {MAX_PDF_PAGES} pages at a time.",
             )
+        statement_columns = None
         for page_number, page in enumerate(pdf.pages, start=1):
             logger.info("Reading PDF page %s/%s", page_number, len(pdf.pages))
+            tables = page.extract_tables()
+            page_rows = []
+            for table in tables or []:
+                detected_columns = get_statement_columns(table)
+                if detected_columns:
+                    statement_columns = detected_columns
+                if statement_columns:
+                    page_rows.extend(extract_statement_table(table, statement_columns))
+            rows.extend(page_rows)
+            if page_rows:
+                continue
             text = page.extract_text() or ""
             if not text.strip():
                 if not shutil.which("tesseract") and not os.getenv("TESSERACT_CMD"):
@@ -315,12 +366,123 @@ def extract_pdf_rows(file_content: bytes, statement_password: str = "") -> list[
                         status_code=422,
                         detail=f"OCR timed out on PDF page {page_number}. Upload a text-based statement or a smaller page range.",
                     ) from exc
-            for line in text.splitlines():
-                amount_match = re.search(r"(?:₹|Rs\.?\s*)?([\d,]+(?:\.\d{1,2})?)\s*$", line)
-                if amount_match:
-                    parts = line[:amount_match.start()].split(None, 1)
-                    rows.append({"date": parts[0] if parts else str(date_type.today()), "description": parts[1] if len(parts) > 1 else "PDF transaction", "amount": amount_match.group(1)})
+            for line in group_statement_lines(text):
+                structured_row = parse_statement_text_row(line)
+                if structured_row:
+                    rows.append(structured_row)
+                    continue
     return rows
+
+
+def group_statement_lines(text: str) -> list[str]:
+    """Join wrapped continuation lines belonging to the same headerless-page row."""
+    grouped = []
+    current = []
+    for raw_line in text.splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line:
+            continue
+        if looks_like_transaction_line(line):
+            if current:
+                grouped.append(" ".join(current))
+            current = [line]
+        elif current:
+            current.append(line)
+    if current:
+        grouped.append(" ".join(current))
+    return grouped
+
+
+def parse_statement_text_row(line: str) -> dict | None:
+    """Parse continuation-page rows when the PDF text layer loses table columns."""
+    date_match = re.match(r"\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})\s+", line)
+    if not date_match:
+        return None
+    row_pattern = re.compile(
+        r"(?P<description>.+?)\s+"
+        r"(?P<reference>\d{8,16})\s+"
+        r"(?P<value_date>\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s+"
+        r"(?P<withdrawal>[\d,]+(?:\.\d{1,2})?)\s+"
+        r"(?P<deposit>[\d,]+(?:\.\d{1,2})?)\s+"
+        r"(?P<closing>[\d,]+(?:\.\d{1,2})?)\s*$"
+    )
+    matches = list(row_pattern.finditer(line[date_match.end():]))
+    if not matches:
+        return None
+    match = matches[-1]
+    return {
+        "date": date_match.group(1),
+        "description": match.group("description").strip(),
+        "reference_number": match.group("reference"),
+        "withdrawal_amount": match.group("withdrawal"),
+        "deposit_amount": match.group("deposit"),
+        "closing_balance": match.group("closing"),
+    }
+
+
+def get_statement_columns(table: list[list]) -> dict | None:
+    """Find the statement schema on the first page where headers are present."""
+    if not table:
+        return None
+    headers = [re.sub(r"\s+", " ", str(value or "").strip().lower()) for value in table[0]]
+    def column(*names):
+        return next((index for index, header in enumerate(headers) if any(name in header for name in names)), None)
+    columns = {"date": column("date"), "description": column("narration", "description", "particular"), "reference": column("ref", "cheque", "chq"), "withdrawal": column("withdrawal", "debit"), "deposit": column("deposit", "credit"), "closing": column("closing balance")}
+    if columns["date"] is None or (columns["withdrawal"] is None and columns["deposit"] is None):
+        return None
+    return columns
+
+
+def extract_statement_table(table: list[list], columns: dict) -> list[dict]:
+    """Map current-page rows using the first page's statement column schema."""
+    if not table:
+        return []
+    date_index = columns["date"]
+    description_index = columns["description"]
+    reference_index = columns["reference"]
+    withdrawal_index = columns["withdrawal"]
+    deposit_index = columns["deposit"]
+    closing_index = columns["closing"]
+    if date_index is None or (withdrawal_index is None and deposit_index is None):
+        return []
+    extracted = []
+    start_index = 1 if get_statement_columns(table) else 0
+    for values in table[start_index:]:
+        cells = [str(value or "").strip() for value in values]
+        if date_index >= len(cells):
+            continue
+        withdrawal = parse_amount(cells[withdrawal_index]) if withdrawal_index is not None and withdrawal_index < len(cells) else 0
+        deposit = parse_amount(cells[deposit_index]) if deposit_index is not None and deposit_index < len(cells) else 0
+        if not withdrawal and not deposit:
+            continue
+        extracted.append({
+            "date": cells[date_index],
+            "description": cells[description_index] if description_index is not None and description_index < len(cells) else "Bank transaction",
+            "reference_number": cells[reference_index] if reference_index is not None and reference_index < len(cells) else "",
+            "withdrawal_amount": withdrawal or "",
+            "deposit_amount": deposit or "",
+            "closing_balance": parse_amount(cells[closing_index]) if closing_index is not None and closing_index < len(cells) else 0,
+        })
+    return extracted
+
+
+def looks_like_transaction_line(line: str) -> bool:
+    """Ignore PDF text lines that do not begin with a transaction date."""
+    first_token = line.strip().split(maxsplit=1)[0] if line.strip() else ""
+    return bool(re.fullmatch(r"(?:\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{1,2}[/-]\d{1,2})", first_token))
+
+
+def find_text_amount(line: str) -> str | None:
+    """Choose a short money-like value and reject long reference or account IDs."""
+    candidates = re.findall(r"(?:₹|Rs\.?\s*)?[-]?\d[\d,]*(?:\.\d{1,2})?", line)
+    candidates = [candidate for candidate in candidates if parse_amount(candidate) is not None]
+    if not candidates:
+        return None
+    marked = [candidate for candidate in candidates if re.search(r"₹|Rs|\.", candidate)]
+    if marked:
+        return marked[-1]
+    short_candidates = [candidate for candidate in candidates if len(re.sub(r"\D", "", candidate)) <= 6]
+    return short_candidates[-1] if short_candidates else None
 
 
 @app.get("/analysis")
