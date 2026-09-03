@@ -507,7 +507,16 @@ def generate_insight(request: InsightRequest):
         return {"configured": False, "answer": "Add your GROQ_API_KEY to Backend/.env to enable AI-powered insights. Local spending analysis is still available."}
     from groq import Groq
     analysis = get_analysis()
-    prompt = f"You are MoneyTrail, a concise personal finance assistant. Use only these facts: {analysis}. Answer the question in 2-4 sentences, never invent facts, and do not provide investment advice. Question: {request.question}"
+    groq_context = {
+        "total_spent": round(analysis["total"], 2),
+        "average_transaction": round(analysis["average"], 2),
+        "category_totals": [
+            {"category": item["category"], "amount": round(item["amount"], 2)}
+            for item in analysis["categories"]
+        ],
+        "unusual_transaction_count": len(analysis["anomalies"]),
+    }
+    prompt = f"You are MoneyTrail, a concise personal finance assistant. Use only these aggregated facts: {groq_context}. No merchant names, descriptions, dates, reference numbers, account details, or raw transaction records are available. Answer the question in 2-4 sentences, never invent facts, and do not provide investment advice. Question: {request.question}"
     try:
         response = Groq(api_key=os.environ["GROQ_API_KEY"]).chat.completions.create(model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"), messages=[{"role": "user", "content": prompt}], temperature=0.2, max_tokens=180)
         return {"configured": True, "answer": response.choices[0].message.content}

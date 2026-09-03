@@ -122,7 +122,7 @@ Digital PDFs are processed with `pdfplumber`. Scanned PDFs are rendered and proc
 
 The SQLite database is created at `Backend/moneytrail.db` and is ignored by Git. The dashboard's **Reset all data** action removes all transactions and resets the database sequence without removing the application configuration.
 
-Groq analysis is optional. When enabled, transaction summaries are sent to Groq for explanation. Keep API keys in `Backend/.env`; never place them in frontend code or commit them to the repository.
+Groq analysis is optional. When enabled, only aggregated category totals, total spending, average transaction amount, and an anomaly count are sent to Groq. Merchant names, descriptions, dates, reference numbers, account details, and raw transaction records are excluded. Keep API keys in `Backend/.env`; never place them in frontend code or commit them to the repository.
 
 ## Development checks
 
